@@ -148,8 +148,20 @@ object KycRuleEngine {
     private fun kyc008(a: CustomerApplication, ev: KycEvidence): RuleEvaluation {
         val name = "Cross-document consistency and photograph match"
         val onFail = "Refer to KYC operations officer"
-        val ocr = ev.ocrName ?: return eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PENDING,
-            "No document name captured (scan PAN/ID to compare)", onFail)
+        val ocr = ev.ocrName
+        if (ocr == null) {
+            // Manual entry: fall back to V-CIP evidence (PAN shown live to the official + face match).
+            val s = ev.vcip ?: return eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PENDING,
+                "No document name captured (scan PAN/ID, or complete V-CIP)", onFail)
+            return when {
+                !s.panCapturedLive -> eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.REFER,
+                    "No scanned name and PAN not captured live in V-CIP", onFail)
+                s.faceMatchScore < FACE_MATCH_MIN_KYC008 -> eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.REFER,
+                    "face match %.2f < %.2f".format(s.faceMatchScore, FACE_MATCH_MIN_KYC008), onFail)
+                else -> eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PASS,
+                    "Verified in V-CIP (PAN captured live), face match %.2f".format(s.faceMatchScore), onFail)
+            }
+        }
         val nameScore = DocumentValidators.nameMatchScore(a.customerName, ocr)
         val face = ev.vcip?.faceMatchScore
         val problems = buildList {

@@ -115,6 +115,13 @@ class DomainTests {
         assertEquals(RuleOutcome.PASS, KycRuleEngine.evaluate(ok, KycEvidence()).first { it.ruleId == "KYC-007" }.outcome)
     }
 
+    @Test fun kyc008FallsBackToVcipWhenNoScan() {
+        val s = VcipSession(true, "IN", true, true, true, true, 3, true, 0.95, true)
+        assertEquals(RuleOutcome.PENDING, KycRuleEngine.evaluate(app(), KycEvidence()).first { it.ruleId == "KYC-008" }.outcome)
+        assertEquals(RuleOutcome.PASS, KycRuleEngine.evaluate(app(), KycEvidence(vcip = s)).first { it.ruleId == "KYC-008" }.outcome)
+        assertEquals(RuleOutcome.REFER, KycRuleEngine.evaluate(app(), KycEvidence(vcip = s.copy(panCapturedLive = false))).first { it.ruleId == "KYC-008" }.outcome)
+    }
+
     @Test fun kyc008NameMismatchRefers() {
         val e = KycRuleEngine.evaluate(app(), KycEvidence(ocrName = "Ravi Kumar")).first { it.ruleId == "KYC-008" }
         assertEquals(RuleOutcome.REFER, e.outcome)

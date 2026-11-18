@@ -107,8 +107,7 @@ private fun LevelRow(vm: ReviewViewModel, c: CaseFile, level: ApprovalLevel) {
             DropdownField(
                 "Officer", officers, selected!!,
                 { "${it.displayName} · limit INR ${it.delegatedLimitInr}" },
-                { selected = it },
-            )
+            ) { selected = it }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { vm.signOff(level, selected!!, Decision.APPROVED) }) { Text("Approve") }
                 OutlinedButton(onClick = { vm.signOff(level, selected!!, Decision.REJECTED) }) { Text("Reject") }
