@@ -1,35 +1,58 @@
 package com.sapphirebank.kyc.presentation.theme
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 private val SapphireLight = lightColorScheme(
-    primary = Color(0xFF0F3D91),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFD9E4FF),
-    onPrimaryContainer = Color(0xFF001B3F),
-    secondary = Color(0xFF00629B),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFCDE5FF),
-    background = Color(0xFFF5F7FA),
-    surface = Color.White,
-    surfaceVariant = Color(0xFFE3E8F0),
-    outline = Color(0xFF73777F),
-    outlineVariant = Color(0xFFC3C7CF),
-    error = Color(0xFFDA1E28),
+    primary = KycColors.Sapphire,
+    onPrimary = KycColors.Surface,
+    primaryContainer = KycColors.SapphireContainer,
+    onPrimaryContainer = KycColors.NavyDark,
+    secondary = KycColors.Navy,
+    onSecondary = KycColors.Surface,
+    secondaryContainer = KycColors.SapphireContainer,
+    onSecondaryContainer = KycColors.NavyDark,
+    tertiary = KycColors.Purple,
+    background = KycColors.Background,
+    onBackground = KycColors.TextPrimary,
+    surface = KycColors.Surface,
+    onSurface = KycColors.TextPrimary,
+    surfaceVariant = KycColors.SurfaceMuted,
+    onSurfaceVariant = KycColors.TextSecondary,
+    outline = KycColors.TextSecondary,
+    outlineVariant = KycColors.Outline,
+    error = KycColors.Danger,
+    onError = KycColors.Surface,
+    errorContainer = KycColors.DangerBg,
+    onErrorContainer = KycColors.Danger,
 )
 
-object KycColors {
-    val Success = Color(0xFF198038)
-    val Warning = Color(0xFFB28600)
-    val Danger = Color(0xFFDA1E28)
-    val Neutral = Color(0xFF6F6F6F)
-    val Purple = Color(0xFF8A3FFC)
+private val KycTypography = Typography().let { t ->
+    t.copy(
+        headlineSmall = t.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+        titleLarge = t.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+        titleMedium = t.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+        titleSmall = t.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+        labelLarge = t.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+        // 12sp floor: nothing in the app is set smaller than this.
+        labelSmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
+    )
 }
+
+private val KycShapes = Shapes(
+    small = RoundedCornerShape(Radius.field),
+    medium = RoundedCornerShape(Radius.card),
+    large = RoundedCornerShape(Radius.sheet),
+)
 
 @Composable
 fun SapphireKycTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = SapphireLight, content = content)
+    MaterialTheme(colorScheme = SapphireLight, typography = KycTypography, shapes = KycShapes, content = content)
 }

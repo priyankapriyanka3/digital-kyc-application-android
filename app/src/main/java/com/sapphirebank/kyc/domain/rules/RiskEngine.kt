@@ -1,6 +1,8 @@
 package com.sapphirebank.kyc.domain.rules
 
+import com.sapphirebank.kyc.domain.model.CountryRisk
 import com.sapphirebank.kyc.domain.model.CustomerApplication
+import com.sapphirebank.kyc.domain.model.ScreeningResult
 import com.sapphirebank.kyc.domain.model.KycMode
 import com.sapphirebank.kyc.domain.model.ProductLine
 import com.sapphirebank.kyc.domain.model.RiskAssessment
@@ -16,7 +18,7 @@ import com.sapphirebank.kyc.domain.model.RuleSeverity
 object RiskEngine {
     const val METHODOLOGY_VERSION = "illustrative-1"
 
-    fun assess(app: CustomerApplication, evals: List<RuleEvaluation>): RiskAssessment {
+    fun assess(app: CustomerApplication, evals: List<RuleEvaluation>, screening: ScreeningResult? = null): RiskAssessment {
         var score = 0
         val factors = mutableListOf<String>()
         fun add(points: Int, label: String) { score += points; factors += "$label (+$points)" }
@@ -26,6 +28,14 @@ object RiskEngine {
         if (app.productLine == ProductLine.RETAIL_LOAN) add(10, "Credit exposure (retail loan)")
         if (app.sanctionAmountInr >= 5_000_000L) add(15, "High value (>= INR 50 lakh)")
         if (app.kycMode == KycMode.AADHAAR_OTP_EKYC) add(10, "Non-face-to-face limited KYC")
+        if (screening != null) {
+            if (screening.watchlistMatch) add(35, "Watchlist name match")
+            when (screening.countryRisk) {
+                CountryRisk.HIGH -> add(20, "High-risk country")
+                CountryRisk.MEDIUM -> add(8, "Medium-risk country")
+                CountryRisk.LOW -> Unit
+            }
+        }
         val open = evals.count {
             it.severity != RuleSeverity.ADVISORY && (it.outcome == RuleOutcome.FAIL || it.outcome == RuleOutcome.REFER)
         }
@@ -33,7 +43,7 @@ object RiskEngine {
 
         val capped = minOf(score, 100)
         val cat = when {
-            app.isPep -> RiskCategory.HIGH // PEPs are always high risk (enhanced due diligence + DCS-004)
+            app.isPep || screening?.watchlistMatch == true -> RiskCategory.HIGH // PEP / watchlist hit: enhanced due diligence + DCS-004
             capped < 30 -> RiskCategory.LOW
             capped < 60 -> RiskCategory.MEDIUM
             else -> RiskCategory.HIGH

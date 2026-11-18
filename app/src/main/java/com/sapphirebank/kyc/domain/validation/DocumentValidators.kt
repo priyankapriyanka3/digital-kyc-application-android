@@ -44,6 +44,24 @@ object DocumentValidators {
         return AADHAAR_REGEX.matches(n) && n[0] >= '2' && verhoeffValid(n)
     }
 
+    val MASKED_AADHAAR_REGEX = Regex("^X{8}[0-9]{4}$")
+
+    /** True for the stored, masked form "XXXXXXXX1234" (spaces ignored). */
+    fun isMaskedAadhaar(raw: String): Boolean =
+        MASKED_AADHAAR_REGEX.matches(raw.filter { !it.isWhitespace() }.uppercase())
+
+    /** Replaces a valid 12-digit Aadhaar with its stored masked form; anything else is returned unchanged. */
+    fun maskedForStorage(raw: String): String {
+        val n = raw.filter { it.isDigit() }
+        return if (isValidAadhaar(n)) "XXXXXXXX" + n.takeLast(4) else raw
+    }
+
+    /** Validation of a number as stored on a case: a vaulted masked Aadhaar was fully validated at intake. */
+    fun validateStored(type: DocType, raw: String, vaultRef: String): ValidationResult =
+        if (type == DocType.AADHAAR && vaultRef.isNotBlank() && isMaskedAadhaar(raw))
+            ValidationResult.ok("Aadhaar verified at intake (vault ref $vaultRef)")
+        else validateNumber(type, raw)
+
     fun isValidPan(raw: String): Boolean = PAN_REGEX.matches(raw.trim().uppercase())
 
     /** 4th PAN char encodes holder type (P = individual, C = company, F = firm, ...). */

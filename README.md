@@ -1,70 +1,78 @@
-# Digital KYC Application (Android)
+# Sapphire Bank Digital KYC (Android)
 
-Sapphire Bank KYC and account-opening app. Kotlin, Jetpack Compose, Material 3, Clean Architecture.
-Business rules come from the Sapphire Bank KYC knowledge base (Context Studio `ctx_20b1c072de75`):
-rule catalogue KYC-001..009, document rules DOC-001..004, state machine, dual control DCS-001..006
-and audit rules AUD-001/002.
+Role-based KYC and account-opening app. Kotlin, Jetpack Compose, Material 3, Clean Architecture (domain / data / presentation).
+Business rules come from the Sapphire Bank KYC knowledge base (rule catalogue KYC-001..009, document rules DOC-001..004, state machine, dual control DCS-001..006, audit rules AUD-001/002).
 
-## Screens
+The app has **no backend**. Data is in memory and seeded with fictional customers at start-up. Sign-in is a demo role picker with no passwords.
 
-| # | Screen | What it does |
-|---|--------|--------------|
-| 1 | **Application** | Applicant details, PAN / Form 60, identity and address OVD, KYC mode. ML Kit on-device OCR fills PAN, Aadhaar, passport number, name and DOB from an image. Regex and checksum validation (PAN `^[A-Z]{5}[0-9]{4}[A-Z]$`, Aadhaar 12 digits with Verhoeff). Live pre-check of KYC-001..004. Aadhaar and PAN are masked after submit (DOC-003). |
-| 2 | **Tracker** | 8-stage stepper (S1 to S8) driven by the state machine, risk-score badge, V-CIP / liveness form evaluated against KYC-006, CKYCR search (KYC-005), KYC completion, AML and eligibility advance. |
-| 3 | **Review** | Dual-control sign-off (L1 Credit Officer, L2 Branch Manager, L3 Senior Management for PEP / high risk), KYC and DCS rule evaluations, hash-chained audit log with **Verify chain** and a **Simulate tamper** demo. |
+## Six role workspaces
+
+| Role | Home | What they do |
+|---|---|---|
+| **Customer** | Welcome, products, application progress | Open Savings / Current / FD-RD / Retail Loan through a step-by-step wizard, upload PAN, masked Aadhaar, address proof, photograph and financial documents, track status, answer information requests, see the welcome kit. DICGC insurance information is shown for FD/RD. |
+| **KYC Analyst** | Assigned cases with filters | Document preview, name / DOB / address validation results, KYC rules, V-CIP session, approve KYC, reject KYC or request information. |
+| **Credit Officer** | Eligibility review queue | Income, business proof, bureau score gauge, DTI, eligibility outcome, recommend approve / request documents / decline. |
+| **Branch Manager** | Pipeline dashboard (pending / in review / approved today) | Final decision with mandatory justification, reassign applications to analysts, reports. |
+| **Compliance Officer** | AML / PEP alerts | Risk score, country risk, watchlist match, screening evidence, clear or place on hold, audit trail. Read-only financial data. |
+| **System Admin** | System configuration | Users and roles, KYC thresholds, products, country risk, reference data, configuration log. Cannot see or approve individual applications. |
+
+## Business rules (enforced in the service layer, not only in the UI)
+
+All checks live in `domain/usecase/CaseService.kt` and `domain/rules/*`. The UI hides actions a role cannot use, but the service re-resolves the caller from the user directory on every call and refuses anything the role is not permitted to do.
+
+- Savings accounts are auto-approved after KYC, unless the case is flagged, on hold, a PEP, or has an open request.
+- PEP and high-risk cases need Compliance clearance and Senior Management sign-off (DCS-004).
+- Loans require a Credit Officer recommendation before the Branch Manager.
+- An application with an open information request cannot be approved or rejected.
+- Aadhaar is vaulted at intake: only `XXXXXXXX` plus the last four digits is stored or displayed.
+- Branch Manager (L2/L3) decisions and all rejections need a written justification. It is part of the signed hash.
+- Segregation of duties (DCS-003): the creator of an application, the sourcing RM and the V-CIP official can never approve it.
+- System Admin has configuration permissions only. Compliance has no approval permission.
+- Audit history is append-only and hash-chained (AUD-002). The repository rejects any save that changes or drops existing audit events, approvals or documents.
 
 ## Architecture
 
 ```
 app/src/main/java/com/sapphirebank/kyc
-├── domain/            pure Kotlin, no Android imports, unit-tested on the JVM
-│   ├── model/         LifecycleStage, ApplicationStatus, CustomerApplication, CaseFile, ...
-│   ├── validation/    DocumentValidators (PAN, Aadhaar+Verhoeff, masking), OcrExtractor, ApplicationValidator
-│   ├── rules/         KycRuleEngine, RiskEngine, DualControlEngine, AuditChain, ApplicationStateMachine
-│   ├── usecase/       CaseWorkflow (pure transitions) and use cases
-│   └── repository/    CaseRepository, DocumentTextRecognizer (interfaces)
-├── data/              InMemoryCaseRepository + SeedData (officer roster), MlKitTextRecognizer
-└── presentation/      Compose screens + ViewModels (application, tracker, review), theme, common components
+├── domain/
+│   ├── model/        roles, permissions, case aggregate, documents, config, screening, eligibility
+│   ├── rules/        KycRuleEngine, DualControlEngine, ScreeningEngine (+ eligibility, auto-approval),
+│   │                 RiskEngine, AuditChain, ApplicationStateMachine, AccessPolicy
+│   ├── usecase/      CaseWorkflow (pure transitions), CaseService (authorization boundary)
+│   ├── validation/   PAN / Aadhaar (Verhoeff) validators, masking, OCR extraction
+│   └── repository/   CaseRepository, DocumentTextRecognizer, CreditBureau (interfaces)
+├── data/             InMemoryCaseRepository (append-only), SeedData, SimulatedBureau, MlKitTextRecognizer
+└── presentation/
+    ├── theme/        Tokens (8dp spacing, radius, colours), Material 3 theme
+    ├── common/       reusable components (status chips, metric cards, score gauge, document cards,
+    │                 validation card, workflow tracker, audit timeline, decision sheet, search/filter, states)
+    ├── customer/ staff/ admin/   role screens and ViewModels
+    └── AppRoot, SignIn, WorkspaceViewModel   shell, adaptive navigation (bottom bar / rail), notifications
 ```
 
-`KycApp` holds a small manual DI container (`AppContainer`). `CaseRepository` is the persistence
-boundary, so Room or a REST client can replace the in-memory store without touching other layers.
+## Simulated or illustrative parts (read before relying on this)
 
-## Rule mapping
-
-| Rule | Where |
-|------|-------|
-| KYC-001 PAN XOR Form 60 | `ApplicationValidator`, `KycRuleEngine` |
-| KYC-002 / 003 identity and address OVD | `DocumentValidators`, `KycRuleEngine` |
-| KYC-004 Aadhaar explicit consent | `ApplicationValidator`, `KycRuleEngine` |
-| KYC-005 CKYCR search (advisory) | `SearchCkycr`, `KycRuleEngine` |
-| KYC-006 V-CIP standards (10 checks) | Tracker V-CIP form, `KycRuleEngine` |
-| KYC-009 beneficial owner | `KycRuleEngine` |
-| DCS-001..004, 006 | `DualControlEngine` |
-| AUD-002 `sha256(prev\|seq\|at\|type\|entity\|payloadSha)`, genesis = 64 zeros | `AuditChain` |
-
-**Illustrative parts:** the knowledge base does not publish risk-scoring weights, so `RiskEngine`
-weights are placeholders (`METHODOLOGY_VERSION = "illustrative-1"`). Replace with the bank's approved
-methodology. Officer ids and names in `SeedData` are sample data. Aadhaar OTP e-KYC and CKYCR calls are
-simulated; there is no backend.
+- **Authentication** is a demo role picker. Production needs real authentication and server-side enforcement; `CaseService` is written to move behind a server unchanged.
+- **Credit bureau** (`SimulatedBureau`) returns fixed or pseudo scores. **CKYCR**, **Aadhaar OTP e-KYC** and **AML screening lists** are simulated. The watchlist and country risk list are fictional configuration.
+- **Risk scoring weights, eligibility thresholds (DTI, bureau) and DICGC cover** are illustrative, because the knowledge base does not publish them. They are editable in the System Admin screens or `EligibilityPolicy` / `RiskEngine`.
+- All names, PANs and Aadhaar numbers in `SeedData` are invented (the Aadhaar numbers only satisfy the Verhoeff checksum).
 
 ## Build and test
 
-Requirements: JDK 17, Android SDK 34 (Android Studio Koala or newer).
+Requirements: JDK 17, Android SDK 34, a `local.properties` with `sdk.dir` (see `scripts/fix-android-sdk.sh`).
 
 ```bash
-./gradlew testDebugUnitTest   # domain unit tests (JUnit 4)
-./gradlew assembleDebug       # debug APK
+./gradlew assembleDebug                 # debug APK
+./gradlew testDebugUnitTest             # 55 domain/service tests + 9 Robolectric UI smoke tests
+./gradlew assembleDebugAndroidTest      # compiles the instrumented tests
+./gradlew lintDebug
+./gradlew installDebug                  # needs a device or emulator
+./gradlew connectedDebugAndroidTest     # needs a device or emulator
 ```
 
-Sample data: tap **Fill sample** on Screen 1 (PAN `ABCDE1234F`, Aadhaar `2345 6789 0124`).
-Suggested demo: submit, Tracker: Start KYC, search CKYCR, switch **Liveness check passed** on, record V-CIP,
-complete KYC, advance until `PENDING_REVIEW`, then sign off on the Review tab. The Credit Officer limit
-is INR 25 lakh and the Branch Manager limit INR 1 crore, so larger sanctions are refused (DCS-002).
+## Test status (honest summary)
 
-## Status
-
-The domain layer (rules, validators, state machine, dual control, audit chain) has JUnit tests that
-pass (24 tests, run with standalone `kotlinc` + JUnit). The Compose UI and Gradle Android build were
-written without an Android SDK in the authoring environment and **have not been compiled yet**. Open the
-project in Android Studio and run a Gradle sync, then fix any compile issues first.
+- Unit tests (domain rules, role enforcement, seed scenarios) and Robolectric UI smoke tests pass on the JVM.
+- The Robolectric tests render the real screens but are **not a device test**: no real GPU, no photo picker, no ML Kit OCR.
+- The instrumented tests (`app/src/androidTest`) **compile but have not been run** on any device or emulator. See `docs/DEVICE_TESTING.md`.
+- Not covered by any test: ML Kit OCR on a real image, runtime permissions, performance and memory profiling, TalkBack walkthroughs.

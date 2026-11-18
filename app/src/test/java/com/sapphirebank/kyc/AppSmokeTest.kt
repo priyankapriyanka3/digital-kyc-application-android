@@ -1,11 +1,10 @@
 package com.sapphirebank.kyc
 
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -13,77 +12,124 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 
-/** Launches the real MainActivity on the JVM (Robolectric) and walks the three screens. */
+/**
+ * Launches the real MainActivity on the JVM (Robolectric) and walks the sign-in and every role workspace.
+ * A tall screen is used so all sign-in cards are composed. This is not a device test: no real GPU, picker or ML Kit.
+ */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = KycApp::class)
+@Config(sdk = [34], application = KycApp::class, qualifiers = "w411dp-h3000dp")
 @ConscryptMode(ConscryptMode.Mode.OFF)
 class AppSmokeTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
+    private fun has(text: String) = rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+
+    private fun waitFor(text: String) {
+        rule.waitUntil(timeoutMillis = 30_000) { has(text) }
+    }
+
+    private fun see(text: String) {
+        waitFor(text)
+        rule.onAllNodesWithText(text, substring = true)[0].assertExists()
+    }
+
     private fun tap(text: String) {
-        rule.onNodeWithText(text).performScrollTo().performClick()
+        waitFor(text)
+        rule.onAllNodesWithText(text)[0].performClick()
         rule.waitForIdle()
     }
 
-    private fun tab(text: String) {
-        rule.onNodeWithText(text).performClick()
+    /** Queue cards read "Retail Loan · Meera Nair", so they are matched by substring. */
+    private fun tapCard(text: String) {
+        waitFor(text)
+        rule.onAllNodesWithText(text, substring = true)[0].performClick()
         rule.waitForIdle()
     }
 
-    private fun see(text: String) =
-        rule.onAllNodesWithText(text, substring = true)[0].performScrollTo().assertIsDisplayed()
-
-    @Test fun launchesAndShowsAllThreeTabs() {
-        rule.onNodeWithText("Sapphire Bank · Digital KYC").assertIsDisplayed()
-        rule.onNodeWithText("Submit application").assertExists()
-        tab("Tracker"); rule.onNodeWithText("No application yet").assertIsDisplayed()
-        tab("Review"); rule.onNodeWithText("Nothing to review").assertIsDisplayed()
+    private fun signInAs(name: String) {
+        waitFor("Demo sign-in")
+        rule.onNodeWithText(name).performClick()
+        rule.waitForIdle()
     }
 
-    @Test fun invalidFormShowsRuleErrors() {
-        tap("Submit application")
-        see("Enter PAN or tick Form 60")
+    @Test fun startsOnSignInWithAllSixRoles() {
+        waitFor("Demo sign-in")
+        listOf("Customer", "KYC Analyst", "Credit Officer", "Branch Manager", "Compliance Officer", "System Admin")
+            .forEach { see(it) }
     }
 
-    @Test fun fullJourneyThroughDualControl() {
-        // Screen 1
-        tap("Fill sample")
-        tap("Submit application")
-        see("Application ARN-000001")
-        see("XXXX XXXX 0124")            // DOC-003 Aadhaar masking
+    @Test fun customerSeesHomeProductsApplicationsAndProfile() {
+        signInAs("Asha Rao")
+        see("Welcome to")
+        see("Open an Account")
+        see("Our Products")
+        tap("Applications")
+        see("My applications")
+        tap("Profile")
+        see("Restrictions")
+        see("Cannot see anyone else's application")
+    }
 
-        // Screen 2
-        tab("Tracker")
-        see("Application stages")
-        tap("Start KYC (Stage 3)")
-        tap("Search CKYCR (KYC-005)")
-        // liveness defaults to false: first record fails KYC-006 evaluation, then fix and re-record
-        tap("Record V-CIP session")
-        see("KYC-006")
-        tap("Liveness check passed")
-        tap("Record V-CIP session")
-        tap("Complete KYC")
-        repeat(8) {
-            if (rule.onAllNodesWithText("Advance from", substring = true).fetchSemanticsNodes().isNotEmpty()) {
-                rule.onNodeWithText("Advance from", substring = true).performScrollTo().performClick()
-                rule.waitForIdle()
-            }
-        }
-        see("Waiting for dual-control sign-off")
+    @Test fun customerWizardStartsAndValidatesStepOne() {
+        signInAs("Asha Rao")
+        tap("Open an Account")
+        see("Choose a product")
+        tap("Continue")
+        // Amount is empty, so the wizard must refuse to advance and show the validation message.
+        see("Enter between")
+    }
 
-        // Screen 3
-        tab("Review")
-        see("Dual-control sign-off")
-        rule.onAllNodesWithText("Approve")[0].performScrollTo().performClick()
-        rule.waitForIdle()
-        see("L1 Credit Officer")
-        rule.onAllNodesWithText("Approve")[0].performScrollTo().performClick()
-        rule.waitForIdle()
-        see("Open account (Stage 7)")
-        tap("Verify chain")
-        see("Chain intact")
-        tap("Simulate tamper")
-        tap("Verify chain")
-        see("Hash mismatch at #1")
+    @Test fun kycAnalystSeesOnlyTheirAssignedQueue() {
+        signInAs("Farhan Qureshi")
+        see("Assigned Cases")
+        tap("Profile")
+        see("Only sees applications assigned to you")
+    }
+
+    @Test fun creditOfficerQueueAndEligibilityReview() {
+        signInAs("Vikram Desai")
+        see("Eligibility Review")
+        tapCard("Meera Nair")
+        see("Eligibility indicators")
+        see("Submit Recommendation")
+    }
+
+    @Test fun branchManagerDashboardAndPipeline() {
+        signInAs("Lakshmi Narayanan")
+        see("Application Pipeline")
+        see("Pending approval")
+        tap("Cases")
+        see("Cases")
+        tap("Reports")
+        see("Reports")
+    }
+
+    @Test fun complianceOfficerSeesFlaggedAlertsAndEvidence() {
+        signInAs("Kavita Menon")
+        see("AML / PEP Screening")
+        see("AML/PEP alert")
+        tapCard("Marta Quillon")
+        see("Screening evidence")
+        see("Place on Hold")
+    }
+
+    @Test fun systemAdminHasConfigurationOnlyAndNoApplicationAccess() {
+        signInAs("Rahul Bose")
+        see("System Configuration")
+        see("User Management")
+        see("KYC Rules")
+        see("Product Configuration")
+        see("Country Risk Settings")
+        see("Reference Data")
+        assertTrue("admin must not see any application list", !has("ARN:"))
+        tap("Profile")
+        see("Cannot view or approve individual applications")
+    }
+
+    @Test fun signingOutReturnsToSignIn() {
+        signInAs("Rahul Bose")
+        tap("Profile")
+        tap("Sign out")
+        see("Demo sign-in")
     }
 }

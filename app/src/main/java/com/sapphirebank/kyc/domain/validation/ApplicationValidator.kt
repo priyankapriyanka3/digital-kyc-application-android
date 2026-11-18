@@ -8,7 +8,7 @@ import java.time.Period
 import java.time.format.DateTimeFormatter
 import java.time.format.ResolverStyle
 
-enum class FormField { NAME, DOB, AMOUNT, PAN, IDENTITY, ADDRESS, CONSENT }
+enum class FormField { NAME, DOB, AMOUNT, PAN, IDENTITY, ADDRESS, CONSENT, INCOME, TENURE, DOCUMENTS }
 
 /** Stage 1/2 form validation (DOC-001 number patterns, DOC-004 PAN format, consent for e-KYC). */
 object ApplicationValidator {

@@ -172,13 +172,15 @@ class DomainTests {
     }
 
     // ---- dual control ----
-    private fun pendingReview(a: CustomerApplication = app(), rm: String = "U-RM-01"): CaseFile {
+    private fun pendingReview(a: CustomerApplication = app(product = ProductLine.CURRENT_ACCOUNT), rm: String = "U-RM-01"): CaseFile {
         var c = submitted(a)
         c = (CaseWorkflow.startKyc(c, now) as Step.Ok).case
         c = (CaseWorkflow.completeKyc(c, now) as Step.Ok).case
         var guard = 0
         while (c.application.status != ApplicationStatus.PENDING_REVIEW && guard++ < 12) {
-            c = (CaseWorkflow.advance(c, now) as Step.Ok).case
+            c = if (c.application.status == ApplicationStatus.EDD_PENDING)
+                (CaseWorkflow.screeningDecision(c, "U-CMP-01", true, "Evidence reviewed and cleared", now) as Step.Ok).case
+            else (CaseWorkflow.advance(c, now) as Step.Ok).case
         }
         assertEquals(ApplicationStatus.PENDING_REVIEW, c.application.status)
         return c
@@ -186,11 +188,11 @@ class DomainTests {
 
     @Test fun dualControlHappyPath() {
         var c = pendingReview()
-        val l2first = CaseWorkflow.signOff(c, ApprovalLevel.L2_BRANCH_MANAGER, off("BRANCH_MANAGER"), Decision.APPROVED, now)
+        val l2first = CaseWorkflow.signOff(c, ApprovalLevel.L2_BRANCH_MANAGER, off("BRANCH_MANAGER"), Decision.APPROVED, now, "Reviewed all documents and approved")
         assertTrue((l2first as Step.Refused).reason.contains("DCS-002"))
-        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now) as Step.Ok).case
+        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Ok).case
         assertEquals(ApplicationStatus.PENDING_REVIEW, c.application.status)
-        c = (CaseWorkflow.signOff(c, ApprovalLevel.L2_BRANCH_MANAGER, off("BRANCH_MANAGER"), Decision.APPROVED, now) as Step.Ok).case
+        c = (CaseWorkflow.signOff(c, ApprovalLevel.L2_BRANCH_MANAGER, off("BRANCH_MANAGER"), Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Ok).case
         assertEquals(ApplicationStatus.APPROVED, c.application.status)
         assertTrue(DualControlEngine.evaluate(c).filter { it.ruleId != "DCS-004" }.all { it.outcome == RuleOutcome.PASS || it.ruleId == "DCS-002" })
         assertTrue(AuditChain.verify(c.audit).valid)
@@ -200,44 +202,44 @@ class DomainTests {
 
     @Test fun wrongRoleAndLimitRefused() {
         val c = pendingReview(app(amount = 3_000_000, product = ProductLine.RETAIL_LOAN))
-        val wrongRole = CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("BRANCH_MANAGER"), Decision.APPROVED, now)
+        val wrongRole = CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("BRANCH_MANAGER"), Decision.APPROVED, now, "Reviewed all documents and approved")
         assertTrue(wrongRole is Step.Refused)
-        val overLimit = CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now)
+        val overLimit = CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now, "Reviewed all documents and approved")
         assertTrue((overLimit as Step.Refused).reason.contains("limit"))
     }
 
     @Test fun segregationOfDuties() {
         val c = pendingReview()
         val rmAsApprover = off("CREDIT_OFFICER").copy(userId = c.sourcingRmId)
-        val r = CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, rmAsApprover, Decision.APPROVED, now)
+        val r = CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, rmAsApprover, Decision.APPROVED, now, "Reviewed all documents and approved")
         assertTrue((r as Step.Refused).reason.contains("DCS-003"))
         // the same person cannot sign two levels (DCS-001)
-        val l1 = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now) as Step.Ok).case
+        val l1 = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Ok).case
         val dup = off("BRANCH_MANAGER").copy(userId = "U-CRD-01")
-        assertTrue((CaseWorkflow.signOff(l1, ApprovalLevel.L2_BRANCH_MANAGER, dup, Decision.APPROVED, now) as Step.Refused).reason.contains("DCS-001"))
+        assertTrue((CaseWorkflow.signOff(l1, ApprovalLevel.L2_BRANCH_MANAGER, dup, Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Refused).reason.contains("DCS-001"))
     }
 
     @Test fun pepNeedsSeniorManagement() {
-        var c = pendingReview(app(pep = true))
+        var c = pendingReview(app(pep = true, product = ProductLine.CURRENT_ACCOUNT))
         assertEquals(RiskCategory.HIGH, c.risk!!.category)
         assertTrue(ApprovalLevel.L3_SENIOR_MANAGEMENT in DualControlEngine.requiredLevels(c))
-        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now) as Step.Ok).case
-        c = (CaseWorkflow.signOff(c, ApprovalLevel.L2_BRANCH_MANAGER, off("BRANCH_MANAGER"), Decision.APPROVED, now) as Step.Ok).case
+        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Ok).case
+        c = (CaseWorkflow.signOff(c, ApprovalLevel.L2_BRANCH_MANAGER, off("BRANCH_MANAGER"), Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Ok).case
         assertEquals(ApplicationStatus.PENDING_REVIEW, c.application.status) // DCS-004 holds it
-        c = (CaseWorkflow.signOff(c, ApprovalLevel.L3_SENIOR_MANAGEMENT, off("SENIOR_MANAGEMENT"), Decision.APPROVED, now) as Step.Ok).case
+        c = (CaseWorkflow.signOff(c, ApprovalLevel.L3_SENIOR_MANAGEMENT, off("SENIOR_MANAGEMENT"), Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Ok).case
         assertEquals(ApplicationStatus.APPROVED, c.application.status)
     }
 
     @Test fun tamperedSignOffDetected() {
         var c = pendingReview()
-        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now) as Step.Ok).case
+        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.APPROVED, now, "Reviewed all documents and approved") as Step.Ok).case
         val forged = c.copy(approvals = c.approvals.map { it.copy(decidedAt = "2020-01-01T00:00:00Z") })
         assertEquals(RuleOutcome.FAIL, DualControlEngine.evaluate(forged).first { it.ruleId == "DCS-006" }.outcome)
     }
 
     @Test fun rejectionTerminatesAtReview() {
         var c = pendingReview()
-        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.REJECTED, now) as Step.Ok).case
+        c = (CaseWorkflow.signOff(c, ApprovalLevel.L1_CREDIT_OFFICER, off("CREDIT_OFFICER"), Decision.REJECTED, now, "Reviewed all documents and approved") as Step.Ok).case
         assertEquals(ApplicationStatus.REJECTED, c.application.status)
         assertEquals(StepState.FAILED, ApplicationStateMachine.progress(c.application.status, c.failedAt)[5].state)
     }

@@ -3,6 +3,7 @@ package com.sapphirebank.kyc.domain.rules
 import com.sapphirebank.kyc.domain.model.CustomerApplication
 import com.sapphirebank.kyc.domain.model.DocType
 import com.sapphirebank.kyc.domain.model.KycEvidence
+import com.sapphirebank.kyc.domain.model.KycThresholds
 import com.sapphirebank.kyc.domain.model.KycMode
 import com.sapphirebank.kyc.domain.model.ProductLine
 import com.sapphirebank.kyc.domain.model.RuleEvaluation
@@ -16,19 +17,12 @@ import com.sapphirebank.kyc.domain.validation.DocumentValidators
  */
 object KycRuleEngine {
 
-    const val NAME_MATCH_MIN = 0.85          // KYC-008 nameMatchMinScore
-    const val FACE_MATCH_MIN_KYC008 = 0.85   // KYC-008 faceMatchMinScore
-    const val FACE_MATCH_MIN_VCIP = 0.90     // KYC-006 faceMatchMinScore
-    const val MIN_RANDOM_QUESTIONS = 3       // KYC-006 minRandomQuestions
-    const val LIMITED_KYC_DEPOSIT_CAP_INR = 100_000L   // KYC-007 balance cap
-    const val LIMITED_KYC_LOAN_CAP_INR = 60_000L       // KYC-007 loans per year
-    const val DEEMED_OVD_WINDOW_DAYS = 90    // KYC-003 deemedOvdUpdateWindowDays
 
     private val boApplicable = setOf(ProductLine.CURRENT_ACCOUNT, ProductLine.RETAIL_LOAN, ProductLine.TERM_DEPOSIT)
 
-    fun evaluate(app: CustomerApplication, ev: KycEvidence): List<RuleEvaluation> = listOf(
-        kyc001(app), kyc002(app), kyc003(app), kyc004(app), kyc005(ev),
-        kyc006(app, ev), kyc007(app), kyc008(app, ev), kyc009(app),
+    fun evaluate(app: CustomerApplication, ev: KycEvidence, t: KycThresholds = KycThresholds()): List<RuleEvaluation> = listOf(
+        kyc001(app), kyc002(app), kyc003(app, t), kyc004(app), kyc005(ev),
+        kyc006(app, ev, t), kyc007(app, t), kyc008(app, ev, t), kyc009(app),
     )
 
     /**
@@ -62,7 +56,7 @@ object KycRuleEngine {
 
     // KYC-002  Identity established through OVD / e-KYC.
     private fun kyc002(a: CustomerApplication): RuleEvaluation {
-        val r = DocumentValidators.validateNumber(a.identityDoc, a.identityDocNumber)
+        val r = DocumentValidators.validateStored(a.identityDoc, a.identityDocNumber, a.aadhaarVaultRef)
         val ok = a.identityDoc.provesIdentity && r.valid
         val d = if (ok) "${a.identityDoc.label} ${DocumentValidators.mask(a.identityDoc, a.identityDocNumber)} accepted as identity proof"
         else if (!a.identityDoc.provesIdentity) "${a.identityDoc.label} does not prove identity"
@@ -72,13 +66,13 @@ object KycRuleEngine {
     }
 
     // KYC-003  Current address established by OVD, or deemed OVD with undertaking.
-    private fun kyc003(a: CustomerApplication): RuleEvaluation {
-        val r = DocumentValidators.validateNumber(a.addressDoc, a.addressDocNumber)
+    private fun kyc003(a: CustomerApplication, t: KycThresholds): RuleEvaluation {
+        val r = DocumentValidators.validateStored(a.addressDoc, a.addressDocNumber, a.aadhaarVaultRef)
         val (o, d) = when {
             !r.valid -> RuleOutcome.FAIL to r.message
             a.addressDoc.isOvd && a.addressDoc.provesAddress -> RuleOutcome.PASS to "Address proven by OVD (${a.addressDoc.label})"
             a.addressDoc == DocType.UTILITY_BILL ->
-                RuleOutcome.REFER to "Deemed OVD; customer must submit an OVD within $DEEMED_OVD_WINDOW_DAYS days"
+                RuleOutcome.REFER to "Deemed OVD; customer must submit an OVD within ${t.deemedOvdWindowDays} days"
             else -> RuleOutcome.FAIL to "${a.addressDoc.label} does not prove address"
         }
         return eval("KYC-003", "Current address established", RuleSeverity.BLOCKING, o, d, "KYC REFERRED; request address proof")
@@ -105,7 +99,7 @@ object KycRuleEngine {
     )
 
     // KYC-006  V-CIP session standards.
-    private fun kyc006(a: CustomerApplication, ev: KycEvidence): RuleEvaluation {
+    private fun kyc006(a: CustomerApplication, ev: KycEvidence, t: KycThresholds): RuleEvaluation {
         val name = "V-CIP session standards"
         val onFail = "Reject session; schedule new V-CIP or in-person"
         if (a.kycMode != KycMode.VCIP) {
@@ -119,9 +113,9 @@ object KycRuleEngine {
             if (!s.livenessPassed) add("liveness not PASS")
             if (!s.panCapturedLive) add("PAN not captured live")
             if (!s.ovdVerifiedViaSource) add("OVD not verified at source")
-            if (s.randomQuestionsAsked < MIN_RANDOM_QUESTIONS) add("only ${s.randomQuestionsAsked}/$MIN_RANDOM_QUESTIONS random questions")
+            if (s.randomQuestionsAsked < t.minRandomQuestions) add("only ${s.randomQuestionsAsked}/${t.minRandomQuestions} random questions")
             if (!s.recordingHashed) add("recording not hashed")
-            if (s.faceMatchScore < FACE_MATCH_MIN_VCIP) add("face match %.2f < %.2f".format(s.faceMatchScore, FACE_MATCH_MIN_VCIP))
+            if (s.faceMatchScore < t.faceMatchMinVcip) add("face match %.2f < %.2f".format(s.faceMatchScore, t.faceMatchMinVcip))
             if (!s.concurrentAuditPassed) add("concurrent audit not PASSED")
         }
         return if (failures.isEmpty())
@@ -130,13 +124,13 @@ object KycRuleEngine {
     }
 
     // KYC-007  Limited-KYC (OTP e-KYC) caps.
-    private fun kyc007(a: CustomerApplication): RuleEvaluation {
+    private fun kyc007(a: CustomerApplication, t: KycThresholds): RuleEvaluation {
         val name = "Limited-KYC (OTP e-KYC) caps and one-year conversion"
         val onFail = "Debit-freeze on expiry; reject application if product disallows"
         if (a.kycMode != KycMode.AADHAAR_OTP_EKYC) {
             return eval("KYC-007", name, RuleSeverity.BLOCKING, RuleOutcome.NOT_APPLICABLE, "Not a limited-KYC application", onFail)
         }
-        val cap = if (a.productLine == ProductLine.RETAIL_LOAN) LIMITED_KYC_LOAN_CAP_INR else LIMITED_KYC_DEPOSIT_CAP_INR
+        val cap = if (a.productLine == ProductLine.RETAIL_LOAN) t.limitedKycLoanCapInr else t.limitedKycDepositCapInr
         return if (a.sanctionAmountInr <= cap)
             eval("KYC-007", name, RuleSeverity.BLOCKING, RuleOutcome.PASS,
                 "Amount INR ${a.sanctionAmountInr} within limited-KYC cap INR $cap; convert to full CDD within 1 year", onFail)
@@ -145,19 +139,25 @@ object KycRuleEngine {
     }
 
     // KYC-008  Cross-document consistency and photograph match (REFER).
-    private fun kyc008(a: CustomerApplication, ev: KycEvidence): RuleEvaluation {
+    private fun kyc008(a: CustomerApplication, ev: KycEvidence, t: KycThresholds): RuleEvaluation {
         val name = "Cross-document consistency and photograph match"
         val onFail = "Refer to KYC operations officer"
         val ocr = ev.ocrName
         if (ocr == null) {
             // Manual entry: fall back to V-CIP evidence (PAN shown live to the official + face match).
-            val s = ev.vcip ?: return eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PENDING,
-                "No document name captured (scan PAN/ID, or complete V-CIP)", onFail)
+            val s = ev.vcip
+            if (s == null) {
+                return if (ev.manualVerifiedBy != null)
+                    eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PASS,
+                        "Name and DOB compared with the uploaded documents by ${ev.manualVerifiedBy}", onFail)
+                else eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PENDING,
+                    "No document name captured (scan PAN/ID, compare manually, or complete V-CIP)", onFail)
+            }
             return when {
                 !s.panCapturedLive -> eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.REFER,
                     "No scanned name and PAN not captured live in V-CIP", onFail)
-                s.faceMatchScore < FACE_MATCH_MIN_KYC008 -> eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.REFER,
-                    "face match %.2f < %.2f".format(s.faceMatchScore, FACE_MATCH_MIN_KYC008), onFail)
+                s.faceMatchScore < t.faceMatchMinKyc008 -> eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.REFER,
+                    "face match %.2f < %.2f".format(s.faceMatchScore, t.faceMatchMinKyc008), onFail)
                 else -> eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PASS,
                     "Verified in V-CIP (PAN captured live), face match %.2f".format(s.faceMatchScore), onFail)
             }
@@ -165,8 +165,8 @@ object KycRuleEngine {
         val nameScore = DocumentValidators.nameMatchScore(a.customerName, ocr)
         val face = ev.vcip?.faceMatchScore
         val problems = buildList {
-            if (nameScore < NAME_MATCH_MIN) add("name match %.2f < %.2f".format(nameScore, NAME_MATCH_MIN))
-            if (face != null && face < FACE_MATCH_MIN_KYC008) add("face match %.2f < %.2f".format(face, FACE_MATCH_MIN_KYC008))
+            if (nameScore < t.nameMatchMin) add("name match %.2f < %.2f".format(nameScore, t.nameMatchMin))
+            if (face != null && face < t.faceMatchMinKyc008) add("face match %.2f < %.2f".format(face, t.faceMatchMinKyc008))
         }
         return if (problems.isEmpty())
             eval("KYC-008", name, RuleSeverity.REFER, RuleOutcome.PASS,

@@ -96,6 +96,10 @@ data class CustomerApplication(
     val isNonIndividual: Boolean,
     val beneficialOwnerRecorded: Boolean,
     val status: ApplicationStatus,
+    /** Country of residence (ISO alpha-2); drives country-risk screening. */
+    val countryCode: String = "IN",
+    /** Aadhaar is vaulted at intake: only the masked form is stored (last 4 digits) plus this reference (DOC-003, KYC-004). */
+    val aadhaarVaultRef: String = "",
 )
 
 data class VcipSession(
@@ -132,6 +136,8 @@ data class ApprovalDecision(
     val decision: Decision,
     val decidedAt: String,
     val signOffSha256: String,
+    /** Mandatory for L2/L3 approvers (DCS justification rule). */
+    val justification: String = "",
 )
 
 data class AuditEvent(
